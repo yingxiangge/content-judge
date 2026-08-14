@@ -1,0 +1,12 @@
+[project]
+name = "content-judge"
+version = "0.1.0"
+description = "内容质量评分与问题定位：客观项走正则，主观项带证据，输出分档"
+requires-python = ">=3.10"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
