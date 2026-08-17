@@ -85,10 +85,14 @@ def check_fabrication(text: str, allowed_source: str) -> list[Issue]:
     hay = (allowed_source or "").lower()
     paras = (text or "").split("\n\n")
     out: list[Issue] = []
+    COMMON_EXEMPT = {"0.0.0.0", "127.0.0.1", "0.0.0", "localhost"}
     for i, p in enumerate(paras):
         for kind, pat in checks:
             for m in pat.finditer(p):
-                if m.group(1).lower() in hay:
+                val = m.group(1).lower()
+                if val in COMMON_EXEMPT:
+                    continue
+                if val in hay:
                     continue
                 out.append(Issue("事实", f"fabricated_{kind}", Severity.HIGH,
                                  f"{kind} `{m.group(1)}` 在素材里找不到出处",
