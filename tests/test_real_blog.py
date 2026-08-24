@@ -1,18 +1,6 @@
-"""用今天博客产线的**两篇真实产出**验证：判分要能区分好坏。
-
-· good —— 最后一跑：中文 1032 / 总长 2561 / 8 个代码块 / Reviewer 100 分
-· thin —— 中间一跑：中文 448 / 4 个代码块，内容对但薄
-· faked —— 在 good 基础上注入一个素材里没有的 issue 编号（真实发生过：
-           模型编出 `Issue #15352`，而真实是 #15591）
-
-只跑客观项，不调 LLM —— 这几项本来就该零随机、零成本。
-"""
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from content_judge import judge  # noqa: E402
-from content_judge.specs import BLOG_ERROR  # noqa: E402
+"""用真实博客产出验证：判分能区分好坏，客观项零随机、零成本。"""
+from content_judge import judge
+from content_judge.specs import BLOG_ERROR
 
 SOURCE = (
     "/save fails with pull model manifest: file does not exist for "
@@ -77,41 +65,30 @@ Error: pull model manifest: file does not exist
 FAKED = GOOD.replace("这个结论是我根据报错串",
                      "上游 Issue #15352 里也有人报了同样的问题，这个结论是我根据报错串")
 
-FAIL = []
 
+class TestBlogJudge:
+    def test_good_vs_thin_score_distinction(self):
+        g = judge(GOOD, BLOG_ERROR, source=SOURCE, symbols=SYMBOLS)
+        t = judge(THIN, BLOG_ERROR, source=SOURCE, symbols=SYMBOLS)
+        assert g.total > t.total
+        assert g.tier in ("S", "A")
+        assert t.tier in ("B", "C")
 
-def check(name, cond, extra=""):
-    print(f"  {'✅' if cond else '❌'} {name}" + (f"  {extra}" if extra else ""))
-    if not cond:
-        FAIL.append(name)
+    def test_fabricated_number_triggers_blocking_issue(self):
+        f = judge(FAKED, BLOG_ERROR, source=SOURCE, symbols=SYMBOLS)
+        assert any(i.kind.startswith("fabricated") for i in f.blocking)
+        assert f.tier == "C"
 
+    def test_good_content_has_no_blocking_issues(self):
+        g = judge(GOOD, BLOG_ERROR, source=SOURCE, symbols=SYMBOLS)
+        assert not g.blocking
 
-def main():
-    g = judge(GOOD, BLOG_ERROR, source=SOURCE, symbols=SYMBOLS)
-    t = judge(THIN, BLOG_ERROR, source=SOURCE, symbols=SYMBOLS)
-    f = judge(FAKED, BLOG_ERROR, source=SOURCE, symbols=SYMBOLS)
+    def test_issues_have_location_or_evidence(self):
+        f = judge(FAKED, BLOG_ERROR, source=SOURCE, symbols=SYMBOLS)
+        assert all(i.location is not None or i.evidence
+                   for i in f.issues if i.severity.value == "high")
 
-    print("\n【好文】"); print(g.format())
-    print("\n【薄文】"); print(t.format())
-    print("\n【注入假编号】"); print(f.format())
-
-    print("\n【判定】")
-    check("好文分数高于薄文", g.total > t.total, f"{g.total:.0f} > {t.total:.0f}")
-    check("好文进 S/A 档", g.tier in ("S", "A"), f"tier={g.tier} ({100*g.total/g.full:.0f}%)")
-    check("薄文落 B/C 档", t.tier in ("B", "C"), f"tier={t.tier}")
-    check("假编号被抓为阻断问题", any(i.kind.startswith("fabricated") for i in f.blocking),
-          f"{len(f.blocking)} 处阻断")
-    check("假编号直接压到 C 档", f.tier == "C", f"tier={f.tier}")
-    check("好文无阻断问题", not g.blocking)
-    check("问题带定位", all(i.location is not None or i.evidence
-                            for i in f.issues if i.severity.value == "high"))
-    check("客观项可复现", judge(GOOD, BLOG_ERROR, source=SOURCE,
-                                symbols=SYMBOLS).total == g.total)
-
-    print("\n" + "=" * 58)
-    print("❌ 失败: " + ", ".join(FAIL) if FAIL else "✅ 全部通过")
-    return 1 if FAIL else 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+    def test_objective_deterministic_reproducibility(self):
+        g1 = judge(GOOD, BLOG_ERROR, source=SOURCE, symbols=SYMBOLS)
+        g2 = judge(GOOD, BLOG_ERROR, source=SOURCE, symbols=SYMBOLS)
+        assert g1.total == g2.total
