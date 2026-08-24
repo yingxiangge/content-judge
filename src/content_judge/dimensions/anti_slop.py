@@ -5,7 +5,7 @@ Anti-Slop Dimension Bridge for content-judge
 from __future__ import annotations
 
 from typing import List
-from anti_slop import scan, assert_clean, is_clean, ALL_RULES
+from anti_slop import scan, assert_clean, is_clean, clean, ALL_RULES
 from ..types import Issue, Severity
 
 def scan_slop_violations(text: str):
@@ -16,7 +16,7 @@ def assert_no_slop(text: str, context: str = "") -> None:
 
 def check_anti_slop(text: str) -> List[Issue]:
     """
-    将 anti_slop 扫描结果适配为 content-judge 标准 Issue
+    将 anti_slop 扫描结果适配为 content-judge 标准 Issue (kind, detail)
     """
     issues: List[Issue] = []
     paras = (text or "").split("\n\n")
@@ -25,9 +25,9 @@ def check_anti_slop(text: str) -> List[Issue]:
         for h in hits:
             issues.append(Issue(
                 dimension="自然度",
-                name=h.rule_id,
+                kind=h.rule_id,
                 severity=Severity.HIGH,
-                description=f"出现典型 AI 套话/营销号词汇: \"{h.matched_text}\" ({h.description})",
+                detail=f"出现典型 AI 套话/营销号词汇: \"{h.matched_text}\" ({h.description})",
                 location=i,
                 evidence=p[max(0, h.position - 20):min(len(p), h.position + len(h.matched_text) + 20)]
             ))
@@ -40,5 +40,6 @@ __all__ = [
     "scan",
     "assert_clean",
     "is_clean",
+    "clean",
     "ALL_RULES"
 ]

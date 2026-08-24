@@ -1,5 +1,6 @@
 """
 Test suite for Anti-Slop dimension in content-judge
+全面测试 check_anti_slop 返回的 Issue 对象、scan_slop_violations 与 assert_no_slop
 """
 import pytest
 from content_judge.dimensions.anti_slop import scan_slop_violations, check_anti_slop, assert_no_slop
@@ -15,6 +16,22 @@ def test_clean_engineer_text():
     issues = check_anti_slop(text)
     assert len(issues) == 0
     assert_no_slop(text)
+
+def test_check_anti_slop_dirty_issues():
+    dirty_text = """
+    炸裂！这篇封神级教程强烈推荐，建议收藏！
+    
+    很多人不知道，其实很多人都错了。
+    
+    大家平时会经常 /clear 吗？欢迎在评论区交流讨论！
+    """
+    issues = check_anti_slop(dirty_text)
+    assert len(issues) >= 5
+    for iss in issues:
+        assert iss.dimension == "自然度"
+        assert iss.kind is not None
+        assert len(iss.detail) > 0
+        assert iss.location is not None
 
 def test_marketing_superlative_detection():
     dirty_text = "炸裂！这篇封神级教程强烈推荐，赶紧冲！"
