@@ -1,9 +1,10 @@
 """X (Twitter) 回帖质检标准。
 
 核心防御：
-1. **量化指标与数字编造拦截**：出现「指标名 + 数字」（如 win rate 40%, ARR $5M, 胜率 80%），
+1. **量化指标与数字编造拦截**：出现「指标名 + 数字」（如 win rate 40%, ARR $5M, 胜率 80%, CAGR 12%），
    而该数字在原推（source）中不存在 → 判定为编造，严重度 HIGH（直接阻断）。
-2. **通用编造检测**：Issue编号/版本号/commit SHA 必须在原推中有出处。
+2. **拒绝通用编造误杀**：`check_fabrication=False`。X 回帖的本质是技术交流与答疑（如「pinning to 3.11.2 fixed it」
+   或「bump to 16 GB」），版本号/容量/commit 属于回答本身，要求它们在原推里有出处是错误判据。
 3. **零 LLM、纯客观项**：毫秒级响应，杜绝 LLM 裁判的打分波动。
 """
 from __future__ import annotations
@@ -13,11 +14,17 @@ import re
 from ..judge import Spec
 from ..types import DimensionScore, Issue, Severity
 
+# 🔴 完整中英文量化与增长指标词表（禁止随意删减！包含 08-15 点名补入的 CAGR / churn 等）
 _METRIC_NUM_RE = re.compile(
     r'(?:'
-    r'win\s*rate|accuracy|sharpe|sortino|pnl|roi|drawdown|calmar|alpha|beta'
-    r'|ARR|MRR|churn|retention|conversion|CAC|LTV|DAU|MAU|NPS|margin|runway'
-    r'|胜率|准确率|收益率|回撤|夏普|年化|月活|留存|转化'
+    # 中文（量化金融与统计）
+    r'夏普|IC值?|年化|月化|日化|周化|回撤|胜率|收益率|波动率|超额|阿尔法|贝塔|'
+    r'仓位|杠杆|溢价率?|换手率?|盈亏比|期望值|准确率|月活|留存|转化|'
+    # 英文·量化金融（注意：win[- ]?rate 必须支持连字符）
+    r'sharpe|alpha|beta|drawdown|win[- ]?rate|accuracy|CAGR|annualized|volatility|'
+    r'returns?|ROI|leverage|P/?E|yield|pnl|sortino|calmar|'
+    # 英文·产品增长（product_growth 档）
+    r'ARR|MRR|churn|retention|conversion|CAC|LTV|DAU|MAU|NPS|margin|runway'
     r')'
     r'[^\d\n]{0,25}'
     r'(\d+(?:\.\d+)?%?)',
@@ -61,6 +68,6 @@ X_REPLY = Spec(
     code_blocks_full=0.0,
     symbols_full=0.0,
     check_format=False,
-    check_fabrication=True,
+    check_fabrication=False,  # 🔴 必须为 False：不误杀正常的版本号/容量/commit 建议
     extra_objective=[check_metric_fabrication],
 )
