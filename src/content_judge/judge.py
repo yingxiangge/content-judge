@@ -107,7 +107,7 @@ def judge(text: str, spec: Spec, source: str = "",
                 (v.issues if isinstance(r, Issue) else v.dimensions).append(r)
         except Exception as e:      # noqa: BLE001
             v.issues.append(Issue(getattr(fn, "__name__", "extra"), "checker_error",
-                                  Severity.LOW, f"客观项检查器异常：{e}"))
+                                  Severity.HIGH, f"客观项检查器异常：{e}"))
 
     if spec.subjective and llm is not None:
         data = _parse(llm(_llm_prompt(text, spec)))
