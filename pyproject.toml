@@ -2,7 +2,19 @@
 name = "content-judge"
 version = "0.1.0"
 description = "内容质量评分与问题定位：客观项走正则，主观项带证据，输出分档"
+readme = "README.md"
 requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{ name = "yingxiangge" }]
+keywords = ["llm", "llm-as-a-judge", "content-quality", "evaluation", "guardrails", "scoring"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Text Processing :: General",
+]
 
 [build-system]
 requires = ["setuptools>=61"]

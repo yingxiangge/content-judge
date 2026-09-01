@@ -21,7 +21,7 @@
 
 ## 🚀 特性
 
-- ⚡ **零运行时依赖**：基于 Python 标准库构建，安装即用，毫秒级执行；
+- ⚡ **零运行时依赖**：本体只用 Python 标准库，安装即用，毫秒级执行（可选的「自然度」维度需另装 [anti-slop](https://github.com/yingxiangge/anti-slop)，见下方安装说明）；
 - 🛡️ **分级硬门禁（Blocking Issues）**：关键合规/真实性问题一票否决降级（S/A/B/C 四档判据）；
 - 📍 **段落级 Issue 定位**：违规项附带 `location`（段落索引）、`evidence`（证据片段）与 `severity`，供下游 Agent 精准定向重写；
 - 🧩 **可插拔领域 Specs 库**：
@@ -38,6 +38,25 @@
 ```bash
 pip install -e .
 ```
+
+**可选：自然度（Anti-Slop）维度**
+
+本体不依赖它，判分主链路（客观项、编造拦截、Specs）与它无关。只有当你要用
+`content_judge.dimensions.anti_slop` 这个桥接把 AI 套话检测接进来时才需要：
+
+```bash
+pip install -e .
+# 另装规则底座（PyPI 上的同名包 anti-slop 是另一个无关项目，请从源码装）
+pip install git+https://github.com/yingxiangge/anti-slop
+```
+
+```python
+from content_judge.dimensions.anti_slop import check_anti_slop
+issues = check_anti_slop(text)   # 转成 content-judge 标准 Issue
+```
+
+> 该桥接只引入 anti-slop 的**检测**能力（`scan` / `assert_clean` / `is_clean`）。
+> 它的 `clean()` 是改写函数，评分器不持有改写能力——判分与改写必须分开。
 
 ### 示例 1：技术排障博客质量门禁
 

@@ -5,7 +5,9 @@ Anti-Slop Dimension Bridge for content-judge
 from __future__ import annotations
 
 from typing import List
-from anti_slop import scan, assert_clean, is_clean, clean, ALL_RULES
+# 只引入**检测**能力：clean() 是改写函数，anti-slop 源码里挂着「仅供诊断展示、
+# 严禁产线自动修复」的红字警告（实测会把标点和语义删碎）。评分器只判断、不改写。
+from anti_slop import scan, assert_clean, is_clean, ALL_RULES
 from ..types import Issue, Severity
 
 def scan_slop_violations(text: str):

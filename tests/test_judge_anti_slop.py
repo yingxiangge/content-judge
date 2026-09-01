@@ -3,6 +3,11 @@ Test suite for Anti-Slop dimension in content-judge
 全面测试 check_anti_slop 返回的 Issue 对象、scan_slop_violations 与 assert_no_slop
 """
 import pytest
+
+# 自然度维度是**可选桥接**：content-judge 本体零依赖，anti-slop 需另装。
+# 没装就跳过整个模块，而不是让别人 clone 下来跑测试直接红。
+pytest.importorskip("anti_slop")
+
 from content_judge.dimensions.anti_slop import scan_slop_violations, check_anti_slop, assert_no_slop
 
 def test_clean_engineer_text():
