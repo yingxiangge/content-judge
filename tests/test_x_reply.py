@@ -102,12 +102,17 @@ class TestXReplyV5Rules:
         assert score == 100 - PENALTY["R1"]
         assert "R1" in ev
 
-    def test_r4_word_limit(self):
-        from content_judge.specs.x_reply import PENALTY, MAX_WORDS
-        long_reply = " ".join(["word"] * (MAX_WORDS + 5))
-        score, _, ev = self._score(long_reply)
-        assert score == 100 - PENALTY["R4"]
-        assert "R4" in ev
+    def test_replies_over_25_words_not_penalized(self):
+        """2026-09-03 废除 R4：只要在 280 字符内，优质长回复（如 30-45 词）不扣分。"""
+        long_reply = (
+            "When building distributed systems, pinning your database schema migrations "
+            "behind read-only replicas prevents cascade outages, even if write latency "
+            "occasionally spikes during peak deployments."
+        )
+        score, blocked, ev = self._score(long_reply)
+        assert not blocked
+        assert score == 100
+        assert ev == "无扣分"
 
     def test_clean_reply_full_score(self):
         score, blocked, ev = self._score(

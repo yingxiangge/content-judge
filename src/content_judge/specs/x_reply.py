@@ -23,7 +23,7 @@ GRADE/SCORE/REASON 三行，没给判断留位置。
 
 ### 分层（这是关键）
 
-    机械规则  → 程序判，零 token：字符数、词数、语种、固定句式、编造数字
+    机械规则  → 程序判，零 token：字符数（<=280 物理上限）、语种、固定句式、编造数字（2026-09-03 废除 R4 词数限制）
     语义规则  → LLM 判：S1/S2/S3（判原推）+ R0/R2/R3/R5/R6（判回帖）
 
 **附带好处：词表全留在程序层，prompt 里一个词都不出现** ⇒ always.md 判据二
@@ -92,7 +92,6 @@ def check_metric_fabrication(text: str, ctx: dict) -> list:
 # ══════════════════════════════════════════════════════════════════
 
 MAX_CHARS = 280          # X 单推硬上限
-MAX_WORDS = 25           # R4：超此词数扣分
 
 # A1 一票否决 —— 纯附和 / 空洞捧场
 PURE_AGREEMENT = (
@@ -126,7 +125,6 @@ PENALTY = {
     "R1": 25,   # AI 腔句式        ← 程序判
     "R2": 20,   # 通用废话
     "R3": 15,   # 复述原推
-    "R4": 10,   # 超 25 词          ← 程序判
     "R5": 20,   # 伪反常识/强行唱反调
     "R6": 10,   # 解释性拖沓
 }
@@ -252,10 +250,6 @@ def check_reply_rules(text: str, ctx: dict) -> list:
             penalty += PENALTY["R1"]
             hits.append(f"R1 AI腔「{p}」-{PENALTY['R1']}")
             break
-    wc = len(_WORD.findall(reply))
-    if wc > MAX_WORDS:
-        penalty += PENALTY["R4"]
-        hits.append(f"R4 {wc}词>{MAX_WORDS} -{PENALTY['R4']}")
 
     # ── LLM 层扣分 ──
     llm = ctx.get("llm")
