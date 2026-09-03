@@ -121,15 +121,16 @@ PENALTY = {
     "S2": 25,   # 缺乏可进入性
     "S3": 25,   # 纯个人生活
     # 判回帖
-    "R0": 20,   # 无新增信息
+    "R0": 20,   # 无新增信息/纯调侃
     "R1": 25,   # AI 腔句式        ← 程序判
     "R2": 20,   # 通用废话
     "R3": 15,   # 复述原推
     "R5": 20,   # 伪反常识/强行唱反调
     "R6": 10,   # 解释性拖沓
+    "R7": 30,   # 领域脱节/跑题错位
 }
 
-_LLM_CODES = ("S1", "S2", "S3", "R0", "R2", "R3", "R5", "R6")
+_LLM_CODES = ("S1", "S2", "S3", "R0", "R2", "R3", "R5", "R6", "R7")
 
 _LATIN = re.compile(r"[A-Za-z]")
 _NON_LATIN = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff\u0400-\u04ff\u0600-\u06ff]")
@@ -170,17 +171,26 @@ reply is best is a human's job, not yours.
   scenery / family, with no public stake for readers.
 
 【REPLY deductions — judge the REPLY】
-- R0 No added information (-{PENALTY['R0']}): adds no new fact, judgment,
-  inference, experience, counter-example or verifiable angle. The reader ends up
-  with nothing they did not already have.
-- R2 Generic filler (-{PENALTY['R2']}): would still hold verbatim under almost
-  any other tweet on the internet.
+- R0 No added angle or substance (-{PENALTY['R0']}): contains zero substantive
+  perspective, technical judgment, counter-argument, or operator takeaway. Bare cheerleading
+  ("can't wait", "this is huge"), pure empty reactions, or unrelated memes belong here.
+  NOTE: An opinionated reframe, builder critique, dry architectural observation, or witty operator
+  pushback counts as valid substance — do NOT penalize an analytical perspective just because it lacks numeric data.
+- R2 Truly generic platitude (-{PENALTY['R2']}): generic cliches with zero context-specificity
+  that could literally be pasted under 1,000 unrelated tweets without changing a word
+  (e.g. "consistency is key", "execution matters most", "focus on solving real user pain", "ship fast").
+  Do NOT penalize a comment that addresses the specific mechanism, business model, or technical concept of the source post.
 - R3 Restates the source (-{PENALTY['R3']}): merely rephrases what the source
   already said.
 - R5 Manufactured contrarianism (-{PENALTY['R5']}): negates the source to
   manufacture disagreement, without substance, evidence or a new angle.
 - R6 Explanatory padding (-{PENALTY['R6']}): one judgment padded with unnecessary
   set-up, causal explanation or subordinate clauses.
+- R7 Context mismatch / off-topic (-{PENALTY['R7']}): introduces entities, domain
+  jargon, or concepts completely alien to the source tweet's topic (e.g. arguing
+  about trade counts or finance under a software coding benchmark, or bringing up
+  unrelated server infra under a personal tweet); shows domain hallucination or
+  prompt leakage.
 
 Be strict about evidence: if you cannot point to the specific text that triggers
 a rule, answer 未触发.
@@ -191,7 +201,7 @@ SOURCE TWEET:
 REPLY:
 \"\"\"{{reply}}\"\"\"
 
-Output exactly these 8 lines, nothing else:
+Output exactly these 9 lines, nothing else:
 S1: 触发/未触发 | <if triggered, why a reader has no motive to respond>
 S2: 触发/未触发 | <if triggered, which part is unreadable without context>
 S3: 触发/未触发
@@ -200,6 +210,7 @@ R2: 触发/未触发
 R3: 触发/未触发
 R5: 触发/未触发 | <if triggered, quote the negation, note missing substance>
 R6: 触发/未触发
+R7: 触发/未触发 | <if triggered, quote the alien entity or off-topic concept>
 """
 
 _VERDICT_LINE = re.compile(

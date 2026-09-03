@@ -124,11 +124,24 @@ class TestXReplyV5Rules:
         from content_judge.specs.x_reply import PENALTY
         fake = lambda p: ("S1: 触发 | no motive\nS2: 未触发\nS3: 未触发\n"
                           "R0: 触发 | adds nothing\nR2: 未触发\nR3: 未触发\n"
-                          "R5: 未触发\nR6: 未触发")
+                          "R5: 未触发\nR6: 未触发\nR7: 未触发")
         score, blocked, ev = self._score("A perfectly fine short reply.", llm=fake)
         assert not blocked
         assert score == 100 - PENALTY["S1"] - PENALTY["R0"]
         assert "S1" in ev and "R0" in ev
+
+    def test_r7_off_topic_context_mismatch(self):
+        from content_judge.specs.x_reply import PENALTY, PASS_SCORE
+        fake = lambda p: ("S1: 未触发\nS2: 未触发\nS3: 未触发\n"
+                          "R0: 未触发\nR2: 未触发\nR3: 未触发\n"
+                          "R5: 未触发\nR6: 未触发\nR7: 触发 | trade counts alien to code bench")
+        score, blocked, ev = self._score("Benchmarks without trade counts are just cosplay.",
+                                         source="Running slop code bench on coding models",
+                                         llm=fake)
+        assert not blocked
+        assert score == 100 - PENALTY["R7"]
+        assert score < PASS_SCORE  # 70 < 75, blocked by score gate
+        assert "R7" in ev
 
     def test_unparsable_llm_output_blocks(self):
         """模型没按逐行格式答 → 显式阻断，**绝不静默当成无扣分**。
