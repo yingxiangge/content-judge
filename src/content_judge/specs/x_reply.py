@@ -239,20 +239,51 @@ every subscore at 0.
     subscore_keys=",".join(f'"{k}":0' for k in DIMENSIONS),
 )
 
-# 模型可能把 JSON 包在代码围栏或前后加话，取第一个 {...} 到最后一个 }
-_JSON_RE = re.compile(r"\{.*\}", re.S)
+# 模型可能把 JSON 包在代码围栏或前后加话，做鲁棒提取
+_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```", re.I)
 
 
 def _parse_verdict(raw: str) -> dict | None:
     """从模型输出里抠出 JSON。抠不出返回 None（调用方据此阻断，绝不静默放行）。"""
-    m = _JSON_RE.search(raw or "")
-    if not m:
+    text = (raw or "").strip()
+    if not text:
         return None
-    try:
-        data = json.loads(m.group(0))
-    except Exception:                                            # noqa: BLE001
+
+    # 1. 尝试从 markdown 围栏中提取
+    m_fence = _FENCE_RE.search(text)
+    candidates = [m_fence.group(1).strip()] if m_fence else []
+    candidates.append(text)
+
+    for cand in candidates:
+        try:
+            data = json.loads(cand)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+
+    # 2. 括号匹配提取首个有效顶层 JSON 对象
+    start = text.find("{")
+    if start == -1:
         return None
-    return data if isinstance(data, dict) else None
+
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                chunk = text[start : i + 1]
+                try:
+                    data = json.loads(chunk)
+                    if isinstance(data, dict):
+                        return data
+                except Exception:
+                    pass
+                break
+
+    return None
 
 
 def check_reply_rules(text: str, ctx: dict) -> list:

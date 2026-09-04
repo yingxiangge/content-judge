@@ -94,14 +94,7 @@ class TestXReplyV5Rules:
         assert not blocked
         assert score == 100
 
-    # ── 程序层扣分 ────────────────────────────────────────────
-    def test_r1_ai_syntax(self):
-        from content_judge.specs.x_reply import PENALTY
-        score, blocked, ev = self._score("This highlights how teams underestimate infra cost.")
-        assert not blocked
-        assert score == 100 - PENALTY["R1"]
-        assert "R1" in ev
-
+    # ── 程序层规则 ────────────────────────────────────────────
     def test_replies_over_25_words_not_penalized(self):
         """2026-09-03 废除 R4：只要在 280 字符内，优质长回复（如 30-45 词）不扣分。"""
         long_reply = (
@@ -112,45 +105,57 @@ class TestXReplyV5Rules:
         score, blocked, ev = self._score(long_reply)
         assert not blocked
         assert score == 100
-        assert ev == "无扣分"
+        assert "A1" in ev
 
-    def test_clean_reply_full_score(self):
+    def test_clean_reply_full_score_unmetered(self):
+        """未注入 LLM 时只跑程序层，A1 未触发则全绿放行。"""
         score, blocked, ev = self._score(
             "Bidding on legends without asking is bold, but hoping it works isn't a strategy.")
-        assert not blocked and score == 100 and ev == "无扣分"
+        assert not blocked and score == 100 and "A1" in ev
 
-    # ── LLM 层 ────────────────────────────────────────────────
-    def test_llm_deductions_accumulate(self):
-        from content_judge.specs.x_reply import PENALTY
-        fake = lambda p: ("S1: 触发 | no motive\nS2: 未触发\nS3: 未触发\n"
-                          "R0: 触发 | adds nothing\nR2: 未触发\nR3: 未触发\n"
-                          "R5: 未触发\nR6: 未触发\nR7: 未触发")
-        score, blocked, ev = self._score("A perfectly fine short reply.", llm=fake)
+    # ── LLM 层（v6 维度制与 SKIP 门禁）────────────────────────
+    def test_llm_dimensions_scoring_and_accumulation(self):
+        """v6: 维度得分累计，总分唯一定义为各项之和。"""
+        from content_judge.specs.x_reply import PASS_SCORE
+        sample_json = (
+            '{"decision":"POST","skip":"none","subscores":{'
+            '"value":20,"specificity":14,"relevance":10,"readability":8,"tone":5,'
+            '"replyability":11,"followup":7,"hook":5,"gap_fit":7,"context_fit":6},'
+            '"notes":"high quality operator perspective"}'
+        )
+        score, blocked, ev = self._score("A solid technical reply.", llm=lambda p: sample_json)
         assert not blocked
-        assert score == 100 - PENALTY["S1"] - PENALTY["R0"]
-        assert "S1" in ev and "R0" in ev
+        assert score == 93
+        assert score >= PASS_SCORE
+        assert "增量价值20/22" in ev
+        assert "high quality" in ev
 
-    def test_r7_off_topic_context_mismatch(self):
-        from content_judge.specs.x_reply import PENALTY, PASS_SCORE
-        fake = lambda p: ("S1: 未触发\nS2: 未触发\nS3: 未触发\n"
-                          "R0: 未触发\nR2: 未触发\nR3: 未触发\n"
-                          "R5: 未触发\nR6: 未触发\nR7: 触发 | trade counts alien to code bench")
-        score, blocked, ev = self._score("Benchmarks without trade counts are just cosplay.",
-                                         source="Running slop code bench on coding models",
-                                         llm=fake)
+    def test_skip_rule_blocks(self):
+        """硬过滤：原推不值得回（SKIP）直接阻断，总分判 0。"""
+        skip_json = '{"decision":"SKIP","skip":"S1","subscores":{},"notes":"no controversy"}'
+        score, blocked, ev = self._score("Whatever reply.", llm=lambda p: skip_json)
+        assert blocked
+        assert score == 0
+        assert "SKIP" in ev
+
+    def test_markdown_fence_json_parsed(self):
+        """模型带有 markdown ```json 围栏时仍能鲁棒解析。"""
+        fenced_json = (
+            'Here is the audit result:\n```json\n'
+            '{"decision":"POST","skip":"none","subscores":{'
+            '"value":15,"specificity":10,"relevance":10,"readability":6,"tone":5,'
+            '"replyability":8,"followup":6,"hook":4,"gap_fit":6,"context_fit":5},'
+            '"notes":"decent answer"}\n```\nHope this helps!'
+        )
+        score, blocked, ev = self._score("Reply with fence.", llm=lambda p: fenced_json)
         assert not blocked
-        assert score == 100 - PENALTY["R7"]
-        assert score < PASS_SCORE  # 70 < 75, blocked by score gate
-        assert "R7" in ev
+        assert score == 75
 
     def test_unparsable_llm_output_blocks(self):
-        """模型没按逐行格式答 → 显式阻断，**绝不静默当成无扣分**。
-
-        「解析不到就当通过」正是静默失效的经典形态（见 BUG_LOG 多起）。
-        """
+        """模型没按逐行格式答 → 显式阻断，**绝不静默当成无扣分**。"""
         score, blocked, ev = self._score("Fine reply.", llm=lambda p: "GRADE: A\nSCORE: 95")
         assert blocked and score == 0
-        assert "格式" in ev
+        assert "输出" in ev or "解析" in ev
 
     def test_llm_exception_blocks(self):
         def boom(p):
@@ -159,22 +164,18 @@ class TestXReplyV5Rules:
         assert blocked and score == 0
 
     # ── 结构约束 ──────────────────────────────────────────────
-    def test_prompt_scores_generated_from_penalty_table(self):
-        """prompt 里的分值必须由 PENALTY 生成，禁止手抄（always.md）。"""
-        from content_judge.specs.x_reply import SEMANTIC_RUBRIC, PENALTY, _LLM_CODES
-        for code in _LLM_CODES:
-            assert f"-{PENALTY[code]}" in SEMANTIC_RUBRIC, f"{code} 分值未出现在 prompt"
+    def test_prompt_scores_generated_from_dimensions_table(self):
+        """prompt 里的分值必须由 DIMENSIONS 动态生成，合计必须 100。"""
+        from content_judge.specs.x_reply import SEMANTIC_RUBRIC, DIMENSIONS, FULL_SCORE
+        assert FULL_SCORE == 100
+        for key, (full, name) in DIMENSIONS.items():
+            assert f"{key} (0-{full})" in SEMANTIC_RUBRIC, f"{key} 未正确生成到 prompt"
 
     def test_prompt_contains_no_wordlist(self):
         """词表只在程序层，prompt 里一个词都不该出现 —— 于是无需同步。"""
-        from content_judge.specs.x_reply import SEMANTIC_RUBRIC, AI_SYNTAX, PURE_AGREEMENT
-        for w in tuple(AI_SYNTAX) + tuple(PURE_AGREEMENT):
+        from content_judge.specs.x_reply import SEMANTIC_RUBRIC, PURE_AGREEMENT, AI_FILLER_OPENER
+        for w in tuple(PURE_AGREEMENT) + tuple(AI_FILLER_OPENER):
             assert w not in SEMANTIC_RUBRIC.lower(), f"词表「{w}」泄漏进 prompt"
-
-    def test_no_bonus_dimensions(self):
-        """只扣分，不加分 —— 加分项会让打分器退回 v4.1 的审美裁判老路。"""
-        from content_judge.specs.x_reply import SEMANTIC_RUBRIC
-        assert "+1" not in SEMANTIC_RUBRIC and "bonus" not in SEMANTIC_RUBRIC.lower()
 
     def test_fabrication_check_emits_no_dimension(self):
         """编造检测是一票否决项，不该占分母（否则扣分值被稀释一半）。"""
