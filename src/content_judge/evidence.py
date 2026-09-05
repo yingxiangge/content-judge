@@ -15,13 +15,18 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
 from .specs.topic_fit import DIRECTIONS, SYSTEM_BLOCKS, render
 
-_JSON = re.compile(r"```json\s*(.+?)\s*```", re.S)
+logger = logging.getLogger(__name__)
+
+# 模型可能把 JSON 包在代码围栏里（带或不带 `json` 标记），或前后再加几句话。
+# ⚠️ 与 `specs/x_reply.py:_FENCE_RE` 是同一条正则 —— 两处重复，改一处要改两处。
+_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```", re.I)
 
 MIN_FIT = 30            # 低于此不进 Pack —— 硬凑的事实会占掉 20 秒里的宝贵时间
 MIN_SOURCE_TYPES = 2    # Diversity：至少两种来源类型
@@ -34,6 +39,11 @@ class Fit:
     topic_fit: int = 0
     covers: list[str] = field(default_factory=list)
     direction: str = "neutral"
+    # 🔴 与哪条讲的是同一件事（**更靠前**那条的 index）；不重复为 None。
+    #    由模型判 —— 「两条事实是不是同一件事」是语义问题，字面规则做不了：
+    #    09-05 实测字面判据在 28 对里误杀 26 对，而模型本来就在逐条读这些事实，
+    #    顺手多输出一个编号，零额外调用。调用方据此①挑证据时跳过②写回库永久生效。
+    same_as: int | None = None
     why: str = ""
 
     @property
@@ -59,13 +69,58 @@ class EvidencePack:
 
 
 def _parse(raw: str) -> list[dict]:
-    m = _JSON.search(raw or "")
-    try:
-        data = json.loads(m.group(1) if m else (raw or "").strip())
-    except json.JSONDecodeError:
+    """从模型输出里抠出 items 列表。抠不出返回 `[]`，**但必须喊一声**。
+
+    🔴 **2026-09-05 修：原来只认 ```` ```json ```` 这一种围栏，且失败时静默返回 []。**
+    deepseek-chat 恰好总是吐带 `json` 标记的围栏，于是这个脆弱点一直没暴露；
+    当天精排换成 gemini-3.8-flash 后格式稍有不同，**24 条事实全部解析失败**，
+    `fit()` 里每个 Fit 停在默认值 ⇒ 日志上是清一色「0分 covers=— why 空」，
+    看起来像"模型把所有事实都毙了"，实际是**根本没解析到模型的回答**。
+
+    ⚠️ 同一个包里 `specs/x_reply.py` 早就修过同样的问题（commit `cfa56f0`
+    「鲁棒解析 Markdown JSON」），**但没同步到这里** —— 两处各写一份解析必然漂移。
+    这里照搬它的三级策略；后续应抽成公共函数，两处共用（改进点，未实施）。
+    """
+    text = (raw or "").strip()
+    if not text:
+        logger.warning("[fit] 模型返回空文本 —— 无法解析")
         return []
-    items = data.get("items") if isinstance(data, dict) else data
-    return items if isinstance(items, list) else []
+
+    def _items(data):
+        items = data.get("items") if isinstance(data, dict) else data
+        return items if isinstance(items, list) else None
+
+    # ① 围栏内（```json 或裸 ```，前后有话也能提）② 全文直接当 JSON
+    m = _FENCE_RE.search(text)
+    for cand in ([m.group(1).strip()] if m else []) + [text]:
+        try:
+            got = _items(json.loads(cand))
+            if got is not None:
+                return got
+        except Exception:      # noqa: BLE001
+            pass
+
+    # ③ 括号匹配，抠出首个完整的顶层 JSON 对象
+    start = text.find("{")
+    if start != -1:
+        depth = 0
+        for i in range(start, len(text)):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        got = _items(json.loads(text[start:i + 1]))
+                        if got is not None:
+                            return got
+                    except Exception:      # noqa: BLE001
+                        pass
+                    break
+
+    # 🔴 **解析不出必须留痕** —— 静默返回 [] 正是这次「全 0 分」查了半天的原因
+    logger.warning("[fit] JSON 解析失败，前 200 字：%s", text[:200])
+    return []
 
 
 def fit(topic: str, claims: Sequence[Any], facts: Sequence[Any],
@@ -97,7 +152,30 @@ def fit(topic: str, claims: Sequence[Any], facts: Sequence[Any],
         out[i].covers = [str(c) for c in cov if str(c) in valid_ids] if isinstance(cov, list) else []
         d = str(r.get("direction") or "neutral")
         out[i].direction = d if d in DIRECTIONS else "neutral"
+        # 🔴 只收**指向更靠前一条**的编号：模型偶尔会填自己或往后指，
+        #    照单全收会绕成环（A 说重复 B、B 说重复 A ⇒ 两条全被跳过，整层空）。
+        try:
+            s = int(r.get("same_as"))
+            out[i].same_as = s - 1 if 0 <= s - 1 < i else None
+        except (TypeError, ValueError):
+            out[i].same_as = None
         out[i].why = str(r.get("why", ""))[:120]
+
+    # 🔴 **精排结果必须留痕**（2026-09-05 立）：在此之前每条事实的
+    #    `topic_fit`/`covers`/`why` 全都算出来了却一行不打，失败时日志只说
+    #    「某层没证据」，说不出**为什么**——09-05 老板问「搜了为什么还是没出片」，
+    #    只能反查 SQLite 的 facts 表倒推，而且倒推不出模型的判断，白跑一轮。
+    #    ⚠️ 这不是「加日志」这种小事：**算了分不留痕 = 这一层永远无法诊断**。
+    #    每层各自的问题原文也一并打——`summary()` 只打 id/type/need，
+    #    而「C1 到底问的是什么」恰恰是判断模型判得对不对的前提。
+    if logger.isEnabledFor(logging.INFO):
+        for c in claims:
+            logger.info("[fit] %s [%s] %s", c.id, getattr(c, "type", "?"),
+                        str(getattr(c, "question", ""))[:60])
+        for f, o in zip(facts, out):
+            logger.info("[fit] #%-2d %3d分 covers=%-10s %-7s %s | %s",
+                        o.index + 1, o.topic_fit, ",".join(o.covers) or "—",
+                        o.direction, str(getattr(f, "claim", ""))[:40], o.why[:60])
     return out
 
 
@@ -111,13 +189,35 @@ def assemble(claims: Sequence[Any], facts: Sequence[Any],
     pack = EvidencePack()
     usable = [f for f in fits if f.usable]
 
+    # 🔴 **一期片子里不许出现同一件事的两个副本**（2026-09-05 加）。
+    #    各层原本独立挑「本层最高分」，互相不知道对方挑了什么 —— 09-05 实证：
+    #    C1 挑中 #4、C2 挑中 #3，而 #3/#4 是同一份统计的两种措辞，
+    #    写稿层收到 4 条副本后按「facts 高度重复」直接拒绝出片，当天缺片。
+    #    ⇒ 记下已挑中的**同事组代表**，后面几层遇到同组的往下顺延。
+    #    判据用模型给的 `same_as`（语义），不用字面相似度（那玩意 28 对误杀 26 对）。
+    def _group(f: Fit) -> int:
+        """顺着 same_as 往前找到这一组的代表（同一件事 → 同一个代表）。"""
+        seen, i = set(), f.index
+        by_idx = {x.index: x for x in fits}
+        while True:
+            cur = by_idx.get(i)
+            if cur is None or cur.same_as is None or i in seen:
+                return i
+            seen.add(i)
+            i = cur.same_as
+
+    used_groups: set[int] = set()
+
     for c in claims:
         picked: list[int] = []
         cand = sorted([f for f in usable if c.id in f.covers],
                       key=lambda x: -x.topic_fit)
         need = set(c.required_evidence)
+        # 本层从高分往下找**第一条没被别的层用过的**（同一件事只算一次）
+        cand = [f for f in cand if _group(f) not in used_groups] or cand[:0]
         if cand:
             picked.append(cand[0].index)
+            used_groups.add(_group(cand[0]))
         # 需要反例的层：单独挑一条 direction=counter，且不能与上面那条重复
         if "counter" in need:
             ctr = next((f for f in cand if f.direction == "counter"
