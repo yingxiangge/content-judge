@@ -206,24 +206,29 @@ def assemble(claims: Sequence[Any], facts: Sequence[Any],
             seen.add(i)
             i = cur.same_as
 
-    used_groups: set[int] = set()
-
     for c in claims:
         picked: list[int] = []
         cand = sorted([f for f in usable if c.id in f.covers],
                       key=lambda x: -x.topic_fit)
         need = set(c.required_evidence)
-        # 本层从高分往下找**第一条没被别的层用过的**（同一件事只算一次）
-        cand = [f for f in cand if _group(f) not in used_groups] or cand[:0]
+        # 🔴 **一条事实可以同时支撑多层**（2026-09-06 改）。
+        #    原实现用 `used_groups` 做**跨层**锁定：某条被前面的层用掉后，
+        #    后面覆盖同一条的层就没得挑、直接空掉。而**一条事实覆盖多层是常态** ——
+        #    09-06 实证：#4 covers C1,C3 且是唯一覆盖 C3 的，被 C1 用掉后 C3 饿死，
+        #    #3 covers C2,C5 同理 ⇒ 本该 4 层的选题只配上 2 层，撞出片门槛。
+        #    （horizon 的 clustering 也早写明「同一条素材可以属于多个话题」，
+        #      两处规矩当时是打架的。）
+        # ⇒ 去重不在配层做，改为**存组代表的下标**：C1 与 C3 都选中同一组时，
+        #    `slots` 里存的是同一个 index，`used()` 按 index 去重后写稿层只收到一条，
+        #    09-05 那个「同一件事的两个副本进同一期」的病照样防住。
         if cand:
-            picked.append(cand[0].index)
-            used_groups.add(_group(cand[0]))
-        # 需要反例的层：单独挑一条 direction=counter，且不能与上面那条重复
+            picked.append(_group(cand[0]))
+        # 需要反例的层：单独挑一条 direction=counter，且不能与上面那条同组
         if "counter" in need:
             ctr = next((f for f in cand if f.direction == "counter"
-                        and f.index not in picked), None)
+                        and _group(f) not in picked), None)
             if ctr:
-                picked.append(ctr.index)
+                picked.append(_group(ctr))
             else:
                 pack.missing.append(f"{c.id}[{c.type}] 缺反例/边界证据")
         if not picked:
@@ -247,14 +252,18 @@ def assemble(claims: Sequence[Any], facts: Sequence[Any],
 
 
 def summary(pack: EvidencePack, claims: Sequence[Any]) -> str:
-    lines = [f"[pack] {'✅ 完整' if pack.ok else '❌ 不完整'} · "
-             f"{len(pack.slots)}/{len(claims)} 层有证据 · 用 {len(pack.used())} 条事实"]
+    # 🔴 **只陈述，不判「完整/不完整」**（2026-09-06 改）：配齐几层已经不是
+    #    出片条件了（见 `video_evidence.Result.ok`），再打「❌ 不完整」会让人以为
+    #    这期出问题了 —— 而它照样发得出去。**内容硬度要看得见，但不是失败信号。**
+    n, total = len(pack.slots), len(claims)
+    mark = "●" * n + "○" * max(0, total - n)
+    lines = [f"[pack] {mark} {n}/{total} 层有证据 · 用 {len(pack.used())} 条事实"]
     for c in claims:
         ids = pack.slots.get(c.id, [])
         lines.append(f"   {'✓' if ids else '✗'} {c.id} [{c.type}] "
                      f"need={'+'.join(c.required_evidence)} → facts{ids or '（无）'}")
     for m in pack.missing:
-        lines.append(f"   🔴 {m}")
+        lines.append(f"   · 缺：{m}")   # 不阻断，只留痕
     for w in pack.warnings:
         lines.append(f"   ⚠️ {w}")
     return "\n".join(lines)
