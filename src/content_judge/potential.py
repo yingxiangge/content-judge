@@ -23,8 +23,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence
 
-from .specs.content_potential import (GATES, SYSTEM_BLOCKS, WEIGHTS,
-                                      render_batch)
+from .specs.content_potential import (GATE_KEYS, HOOK_TYPES, SYSTEM_BLOCKS,
+                                      WEIGHTS, render_batch)
 
 _JSON = re.compile(r"```json\s*(.+?)\s*```", re.S)
 
@@ -33,7 +33,12 @@ _JSON = re.compile(r"```json\s*(.+?)\s*```", re.S)
 class Score:
     """一条原料的打分结果。"""
     title: str
-    gate: Optional[str] = None            # "A"/"B"/"C"/None —— None = 三条转发理由都不沾
+    # 🔴 三道硬门的判定结果 dict（`GATE_KEYS` 三个布尔 + hook_type），None ＝ 有门没过。
+    #    2026-09-06 从 "A"/"B"/"C" 三选一改来：那种设计模型能自我欺骗
+    #    （任何题都能说成「提醒投资者注意风险」⇒ A 恒真，实测 44% 过闸率）。
+    gate: Optional[dict] = None
+    expected: str = ""                    # 观众原来相信什么 —— G4 写不出这个就是没张力
+    test: str = ""                        # 历史数据可能推翻它什么
     relevance: int = 0
     tension: int = 0
     utility: int = 0
@@ -51,11 +56,27 @@ class Score:
 
     @property
     def passed(self) -> bool:
-        """过不过闸。🔴 **只看硬门与合规，与分数无关。**"""
-        return self.gate in GATES and not self.blocked
+        """过不过闸。🔴 **只看硬门与合规，与分数无关。**
+
+        三道门必须**全部** True —— 缺一条就不是我们要的题。
+        """
+        # ⚠️ `isinstance` 不能省：`_parse` 拦得住模型回的旧格式字符串，
+        #    但直接构造 `Score(gate="A")` 会绕过它，那时 `.get()` 直接 AttributeError
+        #    —— 写测试时抓到的。判据放属性里，才是每条路径都过得了的。
+        return (isinstance(self.gate, dict)
+                and all(self.gate.get(k) is True for k in GATE_KEYS)
+                and not self.blocked)
+
+    @property
+    def hook_type(self) -> str:
+        return (self.gate or {}).get("hook_type", "") if isinstance(self.gate, dict) else ""
 
     def line(self) -> str:
-        g = f"闸{self.gate}" if self.gate else "无转发理由"
+        if not isinstance(self.gate, dict):
+            g = "硬门未过"
+        else:
+            miss = [k for k in GATE_KEYS if self.gate.get(k) is not True]
+            g = f"缺{','.join(miss)}" if miss else (self.hook_type or "过闸")
         b = f" · 🚫{','.join(self.blocked)}" if self.blocked else ""
         return (f"[{'✓' if self.passed else '✗'}] {self.total:>5.1f} {g:<10} "
                 f"R{self.relevance} T{self.tension} U{self.utility} "
@@ -115,7 +136,10 @@ def score(items: Sequence[dict],
         if not 0 <= idx < len(out):
             continue
         g = r.get("gate")
-        out[idx].gate = g if g in GATES else None
+        # ⚠️ 只认 dict：模型偶尔回旧格式的字符串，那时按「没过」处理而不是硬塞进去
+        out[idx].gate = g if isinstance(g, dict) else None
+        out[idx].expected = str(r.get("expected", ""))[:120]
+        out[idx].test = str(r.get("test", ""))[:120]
         for k in ("relevance", "tension", "utility"):
             try:
                 out[idx].__dict__[k] = max(0, min(10, int(r.get(k, 0))))
@@ -128,8 +152,8 @@ def score(items: Sequence[dict],
 def summary(scores: Sequence[Score]) -> str:
     """一行体检，给日志和人工看。"""
     ok = [s for s in scores if s.passed]
-    gates = {g: sum(1 for s in scores if s.gate == g) for g in GATES}
+    hooks = {h: sum(1 for s in scores if s.passed and s.hook_type == h) for h in HOOK_TYPES}
     return (f"[potential] {len(ok)}/{len(scores)} 过闸 · "
-            + " ".join(f"{g}:{n}" for g, n in gates.items())
-            + f" · 无理由:{sum(1 for s in scores if not s.gate)}"
+            + " ".join(f"{h}:{n}" for h, n in hooks.items())
+            + f" · 硬门未过:{sum(1 for s in scores if not s.passed and not s.blocked)}"
             + f" · 合规拦截:{sum(1 for s in scores if s.blocked)}")
