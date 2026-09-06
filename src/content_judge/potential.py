@@ -104,7 +104,7 @@ def score(items: Sequence[dict],
     模型漏答某条时补一个空 `Score`（`gate=None` ⇒ 自动被判不过闸），
     **不许静默丢弃**：少一条就是少一个候选，而调用方看不出来。
     """
-    out = [Score(title=str(it.get("title", ""))) for it in items]
+    out = [Score(title=str(it.get("name") or it.get("title", ""))) for it in items]
     if not items:
         return out
 
