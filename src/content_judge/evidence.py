@@ -206,29 +206,35 @@ def assemble(claims: Sequence[Any], facts: Sequence[Any],
             seen.add(i)
             i = cur.same_as
 
+    allocated_groups: set[int] = set()
     for c in claims:
         picked: list[int] = []
         cand = sorted([f for f in usable if c.id in f.covers],
                       key=lambda x: -x.topic_fit)
         need = set(c.required_evidence)
-        # 🔴 **一条事实可以同时支撑多层**（2026-09-06 改）。
-        #    原实现用 `used_groups` 做**跨层**锁定：某条被前面的层用掉后，
-        #    后面覆盖同一条的层就没得挑、直接空掉。而**一条事实覆盖多层是常态** ——
-        #    09-06 实证：#4 covers C1,C3 且是唯一覆盖 C3 的，被 C1 用掉后 C3 饿死，
-        #    #3 covers C2,C5 同理 ⇒ 本该 4 层的选题只配上 2 层，撞出片门槛。
-        #    （horizon 的 clustering 也早写明「同一条素材可以属于多个话题」，
-        #      两处规矩当时是打架的。）
-        # ⇒ 去重不在配层做，改为**存组代表的下标**：C1 与 C3 都选中同一组时，
-        #    `slots` 里存的是同一个 index，`used()` 按 index 去重后写稿层只收到一条，
-        #    09-05 那个「同一件事的两个副本进同一期」的病照样防住。
+
+        # 优先挑选未被前面层挑中的 group 代表，避免多层无脑重复取同一条事实
         if cand:
-            picked.append(_group(cand[0]))
+            best_group = None
+            for f in cand:
+                g = _group(f)
+                if g not in allocated_groups:
+                    best_group = g
+                    break
+            # 若所有 candidate 的 group 都已被前面层挑过（无新鲜事实），则降级复用最高分的 group 代表，保证不因硬锁定而饿死
+            if best_group is None:
+                best_group = _group(cand[0])
+            picked.append(best_group)
+            allocated_groups.add(best_group)
+
         # 需要反例的层：单独挑一条 direction=counter，且不能与上面那条同组
         if "counter" in need:
             ctr = next((f for f in cand if f.direction == "counter"
                         and _group(f) not in picked), None)
             if ctr:
-                picked.append(_group(ctr))
+                g_ctr = _group(ctr)
+                picked.append(g_ctr)
+                allocated_groups.add(g_ctr)
             else:
                 pack.missing.append(f"{c.id}[{c.type}] 缺反例/边界证据")
         if not picked:
