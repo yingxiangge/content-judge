@@ -242,6 +242,19 @@ def assemble(claims: Sequence[Any], facts: Sequence[Any],
         if picked:
             pack.slots[c.id] = picked
 
+    # 🔴 第二轮补齐（2026-09-08）：若配完各层主事实后仍有未分配的可用事实（_group 未进 allocated_groups），
+    # 按 covers 补进对应层（落实「4 条事实全落在同一层，照播」—— 不让好事实因层槽限制被闲置、进而误触发条数下限流产）
+    for c in claims:
+        cand = sorted([f for f in usable if c.id in f.covers],
+                      key=lambda x: -x.topic_fit)
+        for f in cand:
+            g = _group(f)
+            if g not in allocated_groups:
+                if c.id not in pack.slots:
+                    pack.slots[c.id] = []
+                pack.slots[c.id].append(g)
+                allocated_groups.add(g)
+
     used = pack.used()
     # ── Diversity：不是「证据越多越好」，是**结构完整** ──
     types = {getattr(facts[i], "source_type", "") for i in used}
