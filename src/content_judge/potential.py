@@ -39,6 +39,7 @@ class Score:
     gate: Optional[dict] = None
     expected: str = ""                    # 观众原来相信什么 —— G4 写不出这个就是没张力
     test: str = ""                        # 历史数据可能推翻它什么
+    audience: int = 0
     relevance: int = 0
     tension: int = 0
     utility: int = 0
@@ -48,9 +49,10 @@ class Score:
 
     @property
     def total(self) -> float:
-        """三维加权。**只用于排序，不用于淘汰**（淘汰看 `passed`）。"""
+        """四维加权。**只用于排序，不用于淘汰**（淘汰看 `passed`）。"""
         return round(
-            self.relevance * WEIGHTS["relevance"]
+            self.audience * WEIGHTS["audience"]
+            + self.relevance * WEIGHTS["relevance"]
             + self.tension * WEIGHTS["tension"]
             + self.utility * WEIGHTS["utility"], 1) / 10
 
@@ -79,7 +81,7 @@ class Score:
             g = f"缺{','.join(miss)}" if miss else (self.hook_type or "过闸")
         b = f" · 🚫{','.join(self.blocked)}" if self.blocked else ""
         return (f"[{'✓' if self.passed else '✗'}] {self.total:>5.1f} {g:<10} "
-                f"R{self.relevance} T{self.tension} U{self.utility} "
+                f"A{self.audience} R{self.relevance} T{self.tension} U{self.utility} "
                 f"S{self.specificity}{b} · {self.title[:26]} · {self.why[:40]}")
 
 
@@ -140,7 +142,7 @@ def score(items: Sequence[dict],
         out[idx].gate = g if isinstance(g, dict) else None
         out[idx].expected = str(r.get("expected", ""))[:120]
         out[idx].test = str(r.get("test", ""))[:120]
-        for k in ("relevance", "tension", "utility"):
+        for k in ("audience", "relevance", "tension", "utility"):
             try:
                 out[idx].__dict__[k] = max(0, min(10, int(r.get(k, 0))))
             except (TypeError, ValueError):

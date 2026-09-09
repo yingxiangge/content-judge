@@ -9,10 +9,10 @@ ALL_PASS = {"account_action": True, "secondary_market": True,
 
 def test_all_three_gates_pass():
     s = Score(title="中东油轮遇袭油运股能不能追", gate=dict(ALL_PASS),
-              relevance=8, tension=8, utility=8)
+              audience=8, relevance=8, tension=8, utility=8)
     assert s.passed is True
     assert s.hook_type == "warning"
-    assert s.total == 80.0          # 8×35 + 8×40 + 8×25 = 800 → /10
+    assert s.total == 80.0          # 8×30 + 8×25 + 8×25 + 8×20 = 800 → /10
 
 
 def test_each_gate_alone_can_block():
@@ -20,33 +20,35 @@ def test_each_gate_alone_can_block():
     for k in GATE_KEYS:
         g = dict(ALL_PASS)
         g[k] = False
-        s = Score(title="x", gate=g, relevance=10, tension=10, utility=10)
+        s = Score(title="x", gate=g, audience=10, relevance=10, tension=10, utility=10)
         assert s.passed is False, f"{k}=False 竟然放行了"
         assert k in s.line(), f"line() 没说明缺的是 {k}"
 
 
 def test_high_score_cannot_buy_a_pass():
     """满分也救不了硬门 —— 淘汰只由硬门决定，不由分数决定。"""
-    s = Score(title="x", gate=None, relevance=10, tension=10, utility=10)
+    s = Score(title="x", gate=None, audience=10, relevance=10, tension=10, utility=10)
     assert s.total == 100.0 and s.passed is False
 
 
 def test_legacy_string_gate_is_not_accepted():
     """模型偶尔回旧格式 "A"/"B"/"C" —— 必须当没过，不许静默塞进去。"""
-    s = Score(title="x", gate="A", relevance=9, tension=9, utility=9)
+    s = Score(title="x", gate="A", audience=9, relevance=9, tension=9, utility=9)
     assert s.passed is False
 
 
 def test_compliance_block_overrides_gates():
     s = Score(title="x", gate=dict(ALL_PASS), blocked=["荐股"],
-              relevance=9, tension=9, utility=9)
+              audience=9, relevance=9, tension=9, utility=9)
     assert s.passed is False
 
 
 def test_weights_match_comment():
-    """注释公式 == 代码公式：35/40/25，总分 = Σ(维度×权重)/10。"""
-    assert WEIGHTS == {"relevance": 35, "tension": 40, "utility": 25}
+    """注释公式 == 代码公式：30/25/25/20，总分 = Σ(维度×权重)/10。"""
+    assert WEIGHTS == {"audience": 30, "relevance": 25, "tension": 25, "utility": 20}
     assert sum(WEIGHTS.values()) == 100
-    s = Score(title="x", relevance=10, tension=0, utility=0)
-    assert s.total == 35.0
+    s = Score(title="x", audience=10, relevance=0, tension=0, utility=0)
+    assert s.total == 30.0
+    s_rel = Score(title="x", audience=0, relevance=10, tension=0, utility=0)
+    assert s_rel.total == 25.0
     assert set(HOOK_TYPES) == {"warning", "debunk", "counterintuitive"}
