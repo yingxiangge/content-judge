@@ -204,7 +204,6 @@ Score what the reply actually earns. An average reply lands mid-range.
 A reply that only rephrases the source, only cheerleads, or could sit unchanged
 under a thousand unrelated posts earns 0 on relevance.
 
-Do not reward length. Do not reward cleverness on its own.
 There is no separate bonus or penalty outside these four factors: the total is
 their geometric mean, so any factor scored 0 makes the whole reply score 0.
 
