@@ -30,7 +30,15 @@ DEFAULT_TYPE = "factual"     # 类型判不出时的落点：**事实型要求�
 
 @dataclass
 class Claim:
-    """选题的一层。**带检索键** —— 拆完直接能喂给 `factstore.recall()`。"""
+    """选题的一层。**带检索键** —— `asset` / `condition` / `action` 供下游召回用。
+
+    ⚠️ **2026-09-10 起用途变了**（`factstore.recall()` 的 A 路已退役）：
+    这三个键不再拼 SQL 的 `LIKE`，而是
+      · `asset` / `condition` → `video_evidence._claim_queries()` 拼 **Q2 结构化查询串**，
+        喂 embedding 做语义召回；
+      · `action` → `store.semantic(actions=...)` 的**方向过滤**与负召回的反向取值。
+    ⇒ 拆层 prompt 照旧要产出它们，**只是消费方从 SQL 换成了向量路**。
+    """
     id: str
     question: str
     type: str = DEFAULT_TYPE
