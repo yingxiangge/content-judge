@@ -59,35 +59,57 @@ class Claim:
                 f"{self.question[:30]} · search={self.search}")
 
 
-def _parse(raw: str) -> list[dict]:
+def _parse(raw: str) -> dict | list[dict]:
     m = _JSON.search(raw or "")
+    text = m.group(1) if m else (raw or "").strip()
     try:
-        data = json.loads(m.group(1) if m else (raw or "").strip())
+        data = json.loads(text)
     except json.JSONDecodeError:
-        return []
-    items = data.get("claims") if isinstance(data, dict) else data
-    return items if isinstance(items, list) else []
+        return {}
+    return data
 
 
 def decompose(topic: str, llm: Callable[[str], str],
               gate: str = "", why: str = "", max_claims: int = 5) -> list[Claim]:
-    """选题 → claims。拆不出返回空列表（调用方据此换选题或退回整题处理）。
+    """热点事件 → 4 维度客观事实 claims。拆不出返回空列表。
 
-    ⚠️ **超出 `max_claims` 的截断从后往前** —— prompt 已要求按重要性排序，
-    20 秒讲不完时该砍的是最边缘那层，不是随机丢。
+    2026-09-11 老板定：接入 4 维度客观事实检索词（政策通报/规模供需/核心企业/价格市场）。
     """
     prompt = "\n\n".join(SYSTEM_BLOCKS) + "\n\n" + render_topic(topic, gate, why)
+    parsed = _parse(llm(prompt))
     out: list[Claim] = []
-    for i, r in enumerate(_parse(llm(prompt)), 1):
-        if not isinstance(r, dict):
-            continue
-        q = str(r.get("question") or "").strip()
-        if not q:
-            continue
-        # 类型按层位置定（四层固定顺序），不让模型判
-        t = LAYER_TYPES[i - 1] if i <= len(LAYER_TYPES) else DEFAULT_TYPE
-        out.append(Claim(id=f"C{i}", question=q, type=t,
-                         search=str(r.get("search") or "").strip()))
+
+    # 优先解析 4 维度字典: {"政策通报": "...", "规模供需": "...", "核心企业": "...", "价格市场": "..."}
+    dim_keys = ("政策通报", "规模供需", "核心企业", "价格市场")
+    if isinstance(parsed, dict) and any(k in parsed for k in dim_keys):
+        for i, name in enumerate(dim_keys, 1):
+            sq = str(parsed.get(name) or "").strip()
+            if not sq:
+                continue
+            t = LAYER_TYPES[i - 1] if i <= len(LAYER_TYPES) else DEFAULT_TYPE
+            out.append(Claim(id=f"C{i}", question=f"{name}事实", type=t, search=sq))
+    elif isinstance(parsed, dict) and "claims" in parsed:
+        items = parsed.get("claims") or []
+        for i, r in enumerate(items, 1):
+            if not isinstance(r, dict):
+                continue
+            q = str(r.get("question") or "").strip()
+            sq = str(r.get("search") or "").strip()
+            if not q and not sq:
+                continue
+            t = LAYER_TYPES[i - 1] if i <= len(LAYER_TYPES) else DEFAULT_TYPE
+            out.append(Claim(id=f"C{i}", question=q or f"维度{i}", type=t, search=sq))
+    elif isinstance(parsed, list):
+        for i, r in enumerate(parsed, 1):
+            if not isinstance(r, dict):
+                continue
+            q = str(r.get("question") or "").strip()
+            sq = str(r.get("search") or "").strip()
+            if not q and not sq:
+                continue
+            t = LAYER_TYPES[i - 1] if i <= len(LAYER_TYPES) else DEFAULT_TYPE
+            out.append(Claim(id=f"C{i}", question=q or f"维度{i}", type=t, search=sq))
+
     return out[:max_claims]
 
 
