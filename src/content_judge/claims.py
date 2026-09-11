@@ -10,7 +10,7 @@
 
 🔴 `required_evidence` **由 `type` 推出，不让模型自由给** —— 模型每次给的
 组合会飘，而"争议型需要反例、事实型不需要"是**规则**不是判断。
-模型只负责判 `type`（那才是判断），映射由代码做。
+`type` 本身也由层位置定（2026-09-11 起），模型只写子问题与检索词。
 """
 from __future__ import annotations
 
@@ -19,25 +19,20 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable, Sequence
 
-from .specs.claim_decompose import (EVIDENCE_BY_TYPE, SYSTEM_BLOCKS,
+from .specs.claim_decompose import (EVIDENCE_BY_TYPE, LAYER_TYPES, SYSTEM_BLOCKS,
                                     render_topic)
 
 _JSON = re.compile(r"```json\s*(.+?)\s*```", re.S)
-VALID_ACTIONS = {"buy", "sell", "hold", "none"}
 DEFAULT_TYPE = "factual"     # 类型判不出时的落点：**事实型要求最松**，
                              # 不会去找不存在的反方证据 ⇒ 不会造成误杀式阻断
 
 
 @dataclass
 class Claim:
-    """选题的一层。**带检索键** —— `asset` / `condition` / `action` 供下游召回用。
+    """选题的一层。`type` 由层位置定（`LAYER_TYPES`），`search` 是这一层的检索词。
 
-    ⚠️ **2026-09-10 起用途变了**（`factstore.recall()` 的 A 路已退役）：
-    这三个键不再拼 SQL 的 `LIKE`，而是
-      · `asset` / `condition` → `video_evidence._claim_queries()` 拼 **Q2 结构化查询串**，
-        喂 embedding 做语义召回；
-      · `action` → `store.semantic(actions=...)` 的**方向过滤**与负召回的反向取值。
-    ⇒ 拆层 prompt 照旧要产出它们，**只是消费方从 SQL 换成了向量路**。
+    ⚠️ `asset` / `condition` / `action` 已不再由拆层产出（2026-09-11），字段保留只为兼容
+    旧调用方构造；`action` 恒为 none ⇒ 召回里的方向过滤与负召回实际不生效（早于本次即如此）。
     """
     id: str
     question: str
@@ -46,6 +41,8 @@ class Claim:
     condition: str = ""
     action: str = "none"
     why: str = ""
+    # 新闻检索关键词（空格分隔）—— 补搜按层各搜一次用它，不再拿选题问句去搜
+    search: str = ""
 
     @property
     def required_evidence(self) -> tuple[str, ...]:
@@ -59,7 +56,7 @@ class Claim:
 
     def line(self) -> str:
         return (f"{self.id} [{self.type:<13}] need={'+'.join(self.required_evidence):<22} "
-                f"{self.question[:30]} · {self.asset}/{self.condition}/{self.action}")
+                f"{self.question[:30]} · search={self.search}")
 
 
 def _parse(raw: str) -> list[dict]:
@@ -87,15 +84,10 @@ def decompose(topic: str, llm: Callable[[str], str],
         q = str(r.get("question") or "").strip()
         if not q:
             continue
-        t = str(r.get("type") or "").strip().lower()
-        if t not in EVIDENCE_BY_TYPE:
-            t = DEFAULT_TYPE           # 判不出走最松的，避免误杀式阻断
-        a = str(r.get("action") or "none").strip().lower()
-        out.append(Claim(
-            id=str(r.get("id") or f"C{i}"), question=q, type=t,
-            asset=str(r.get("asset") or ""), condition=str(r.get("condition") or ""),
-            action=a if a in VALID_ACTIONS else "none",
-            why=str(r.get("why") or "")[:100]))
+        # 类型按层位置定（四层固定顺序），不让模型判
+        t = LAYER_TYPES[i - 1] if i <= len(LAYER_TYPES) else DEFAULT_TYPE
+        out.append(Claim(id=f"C{i}", question=q, type=t,
+                         search=str(r.get("search") or "").strip()))
     return out[:max_claims]
 
 

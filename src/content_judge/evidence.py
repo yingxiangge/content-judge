@@ -183,8 +183,7 @@ def assemble(claims: Sequence[Any], facts: Sequence[Any],
              fits: Sequence[Fit]) -> EvidencePack:
     """按层配齐证据，再做结构检查。
 
-    每层选 `topic_fit` 最高的；争议型额外单独找一条 `counter` ——
-    **反例不能靠运气**：按分数排，反例几乎总是排在支持证据后面。
+    每层只选 1 条：`topic_fit` 最高、且没被前面几层用过的那组代表。
     """
     pack = EvidencePack()
     usable = [f for f in fits if f.usable]
@@ -227,33 +226,15 @@ def assemble(claims: Sequence[Any], facts: Sequence[Any],
             picked.append(best_group)
             allocated_groups.add(best_group)
 
-        # 需要反例的层：单独挑一条 direction=counter，且不能与上面那条同组
-        if "counter" in need:
-            ctr = next((f for f in cand if f.direction == "counter"
-                        and _group(f) not in picked), None)
-            if ctr:
-                g_ctr = _group(ctr)
-                picked.append(g_ctr)
-                allocated_groups.add(g_ctr)
-            else:
-                pack.missing.append(f"{c.id}[{c.type}] 缺反例/边界证据")
         if not picked:
             pack.missing.append(f"{c.id}[{c.type}] 一条证据都没有")
         if picked:
             pack.slots[c.id] = picked
 
-    # 🔴 第二轮补齐（2026-09-08）：若配完各层主事实后仍有未分配的可用事实（_group 未进 allocated_groups），
-    # 按 covers 补进对应层（落实「4 条事实全落在同一层，照播」—— 不让好事实因层槽限制被闲置、进而误触发条数下限流产）
-    for c in claims:
-        cand = sorted([f for f in usable if c.id in f.covers],
-                      key=lambda x: -x.topic_fit)
-        for f in cand:
-            g = _group(f)
-            if g not in allocated_groups:
-                if c.id not in pack.slots:
-                    pack.slots[c.id] = []
-                pack.slots[c.id].append(g)
-                allocated_groups.add(g)
+    # 🔴 **每层只取精排最高的 1 条**（2026-09-11 老板定：30 秒片子事实多了反而讲不清）。
+    #    删掉了两段旧逻辑：争议层额外配一条反例、09-08 的「第二轮补齐」
+    #    （把剩余可用事实全塞进各层）—— 09-11 实测交给写稿的是 4 层 9 条，
+    #    写稿只能挑着念，又回到「数字堆砌」（09-10 黄金片完播 5%）。
 
     used = pack.used()
     # ── Diversity：不是「证据越多越好」，是**结构完整** ──

@@ -16,16 +16,12 @@
 ⇒ 回测只是**素材之一**：它能填 `factual` 的直接证据、能填 `causal` 的机制说明，
 但**没有任何一层是非它不可的**。
 
-🔴 **两个不能省的输出**：
-
-1. **`type` 决定这个 claim 需要什么证据结构** —— 见 `EVIDENCE_BY_TYPE`。
-   ⚠️ **不许一刀切要求所有 claim 都有反向证据**：
-   「沪深300 创立至今收益多少」是事实型，强行找反方就是为形式完整添垃圾
-   （同 `always.md`「闸误杀的代价是回落」）。
-
-2. **检索键 `asset` / `condition` / `action`** —— 拆完直接就能喂给
-   `factstore.recall()`。少了它们，下游还要再解析一次自然语言，
-   而那一步会引入第二套判据、迟早与这里分叉。
+🔴 **模型每层只输出 `question` + `search`**（2026-09-11 老板定）：
+- `type` 不再让模型判：四层固定、按序输出，类型由层位置决定（`LAYER_TYPES`）。
+  实测同一选题跑三次，第 4 层被标成 controversial 一次、causal 两次 —— 让模型判只会引入抖动。
+- `asset` / `condition` 删掉：它们原本给 SQL 召回用（09-10 已退役），之后只剩拼向量查询串一处，
+  由 `search` 顶替（`video_evidence._claim_queries`）。
+- `search` 是补搜的检索词：09-11 实测拿选题问句搜新闻，8 条大半跑题；按层用检索词搜，前三层几乎全贴题。
 """
 from __future__ import annotations
 
@@ -42,65 +38,46 @@ EVIDENCE_BY_TYPE: dict[str, tuple[str, ...]] = {
     "causal": ("mechanism",),
 }
 
-TYPE_DESC = {
-    "controversial": "有争议的判断题（大家吵得起来，正反都有人信）",
-    "factual": "无争议的事实查询（查一下就有确定答案）",
-    "causal": "因果断言（A 导致了 B）",
-}
+# 四层固定顺序 → 每层的 claim 类型。**唯一真相**，`claims.decompose` 按输出顺序套用。
+LAYER_TYPES: tuple[str, ...] = ("factual", "controversial", "causal", "causal")
+# 四层名称，与下方「拆解维度」逐条对应；写稿层按它给每条事实标层（`video_evidence.to_facts_dict`）
+LAYER_NAMES: tuple[str, ...] = ("发生了什么", "认知反差", "背后机制", "风险边界")
 
-EVIDENCE_DESC = {
-    "support": "支持该判断的证据",
-    "counter": "反例或边界条件（什么情况下不成立）",
-    "direct": "直接回答的高质量证据",
-    "mechanism": "机制解释（为什么会这样）",
-}
-
-ROLE = """你负责将短视频选题拆解为 3~4 个面向短视频受众的独立子问题（Claim）。
-
-面向大众受众的 20~30 秒竖屏短视频。拆解的子问题必须分别覆盖事实真相、认知反差与避坑逻辑。"""
+ROLE = """你负责将短视频选题拆解为 4 个面向短视频受众的子问题。"""
 
 RULES = """## 拆解维度
 
-按以下 4 层受众疑问递进拆解：
-1. 核心现象：发生了什么具体市场异动或案例事件，时间与核心标的表现。
-2. 认知反差：受众普遍以为的预期，与实际走势或被套结果的反差事实。
-3. 背后机制：导致该反差的深层原因、资金博弈逻辑或商业运作机理。
-4. 风险边界：该逻辑在什么情况下失效、存在哪些例外或下行代价。
+按以下 4 层顺序，每层拆 1 个子问题，按顺序输出：
+1. 核心现象：发生了什么具体异动或事件，发生时间与核心主体具体表现。
+2. 认知反差：受众普遍持有的预期，与实际表现的反差事实。
+3. 背后机制：导致该反差的深层原因、底层驱动机制或运作机理。
+4. 风险边界：该逻辑在什么情况下失效、存在哪些例外或潜在代价。
 
-## 红线与规则
+## 规则
 
-1. 严禁拆解为仅全市场回测或复杂统计才能回答的学术命题。每一个子问题都必须是公开资讯、新闻报道、上市公司公告或财报能够回答的。
-2. 拆出 3~4 个子问题，彼此互斥，合起来完整回答原选题。
-3. 标注证据类型与检索意图：
-   - type：factual（事实查证）/ controversial（争议反差，需正反两面证据）/ causal（因果归因机制）
-   - asset：核心涉及的标的或实体名称，无则留空字符串
-   - condition：前提条件或特定场景，无则留空字符串"""
+1. 每一个子问题都必须是确定的事实能够回答的。
+2. 子问题彼此互斥，合起来完整回答原选题。
+3. 检索词 search：输出 2 至 5 个关键词，必须包含本次事件的核心主体。"""
 
 OUTPUT_JSON = """## 输出格式
 
 必须严格输出合法 JSON，包裹在 ```json 与 ``` 之间：
 {
   "claims": [
-    {
-      "id": "C1",
-      "question": "具体待验证的子问题",
-      "type": "factual",
-      "asset": "实体名称",
-      "condition": "条件"
-    }
+    {"question": "子问题", "search": "关键词 关键词 关键词"}
   ]
 }
 
-`type` 只能是 factual / controversial / causal。
 不要输出任何解释、前言或 Markdown 正文。"""
 
 
 def render_topic(topic: str, gate: str = "", why: str = "") -> str:
+    """选题 + 来源标题。`gate` 与 `why` 相同时只给一次（选题线 v3 起二者都是来源标题）。"""
     lines = [f"【选题】{topic}"]
-    if gate:
-        lines.append(f"【这条内容的角度】{gate}")
     if why:
-        lines.append(f"【为什么值得做】{why}")
+        lines.append(f"【来源标题】{why}")
+    if gate and why not in gate:
+        lines.append(f"【这条内容的角度】{gate}")
     return "\n".join(lines)
 
 

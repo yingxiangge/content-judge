@@ -77,9 +77,12 @@ def render(topic: str, claims: list, facts: list) -> str:
     for n, f in enumerate(facts, 1):
         # ⚠️ 用 getattr 而不是直接取属性：元信息缺一个字段只该少显示一行，
         #    不该让整条产线崩。调用方传进来的未必都是 `factstore.Fact`。
+        # 数据时间（抽取层给出，存在 period_end）—— 让精排分得清这条是这几天的还是旧数据
+        when = getattr(f, "period_end", "")
         meta = " · ".join(x for x in (getattr(f, "asset", ""),
                                       getattr(f, "condition", ""),
-                                      getattr(f, "horizon", "")) if x)
+                                      getattr(f, "horizon", ""),
+                                      f"数据时间 {when}" if when else "") if x)
         lines.append(f"{n}. {getattr(f, 'claim', '')}")
         if meta:
             lines.append(f"   （{meta}）")
