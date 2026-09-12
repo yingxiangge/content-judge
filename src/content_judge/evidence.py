@@ -30,6 +30,7 @@ _FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```", re.I)
 
 MIN_FIT = 30            # 低于此不进 Pack —— 硬凑的事实会占掉 20 秒里的宝贵时间
 MIN_SOURCE_TYPES = 2    # Diversity：至少两种来源类型
+MAX_PACK_FACTS = 8      # 🔴 组装交付写稿的总事实数天花板（2026-09-12 老板定：短视频最多承载 8 条，防大库膨胀）
 
 
 @dataclass
@@ -231,10 +232,39 @@ def assemble(claims: Sequence[Any], facts: Sequence[Any],
         if picked:
             pack.slots[c.id] = picked
 
-    # 🔴 **每层只取精排最高的 1 条**（2026-09-11 老板定：30 秒片子事实多了反而讲不清）。
-    #    删掉了两段旧逻辑：争议层额外配一条反例、09-08 的「第二轮补齐」
-    #    （把剩余可用事实全塞进各层）—— 09-11 实测交给写稿的是 4 层 9 条，
-    #    写稿只能挑着念，又回到「数字堆砌」（09-10 黄金片完播 5%）。
+    # 🔴 第二轮轮流补齐（2026-09-08 老板定，09-12 升级）：
+    #    各维度按其精排得分降序排序，顺序轮询补齐（Round-Robin），
+    #    每一轮每维度最多只补 1 条次优事实，杜绝一股脑偏向单一维度，
+    #    总事实数严格封顶 MAX_PACK_FACTS (8 条)。
+    def _claim_score(clm) -> int:
+        first_idx = (pack.slots.get(clm.id) or [None])[0]
+        if first_idx is not None:
+            fit_obj = next((x for x in fits if x.index == first_idx), None)
+            if fit_obj:
+                return fit_obj.topic_fit
+        cand_items = [f for f in usable if clm.id in f.covers]
+        return max((f.topic_fit for f in cand_items), default=0)
+
+    ranked_claims = sorted(claims, key=_claim_score, reverse=True)
+
+    while len(pack.used()) < MAX_PACK_FACTS:
+        added_in_pass = False
+        for clm in ranked_claims:
+            if len(pack.used()) >= MAX_PACK_FACTS:
+                break
+            cand_items = sorted([f for f in usable if clm.id in f.covers],
+                                key=lambda x: -x.topic_fit)
+            for f in cand_items:
+                g = _group(f)
+                if g not in allocated_groups:
+                    if clm.id not in pack.slots:
+                        pack.slots[clm.id] = []
+                    pack.slots[clm.id].append(g)
+                    allocated_groups.add(g)
+                    added_in_pass = True
+                    break  # 本维度在本轮只补 1 条，把机会留给下一维度（顺序轮流补齐）
+        if not added_in_pass:
+            break
 
     used = pack.used()
     # ── Diversity：不是「证据越多越好」，是**结构完整** ──
