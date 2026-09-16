@@ -79,10 +79,12 @@ def decompose(topic: str, llm: Callable[[str], str],
     parsed = _parse(llm(prompt))
     out: list[Claim] = []
 
-    # 优先解析 4 维度字典: {"政策通报": "...", "规模供需": "...", "核心企业": "...", "价格市场": "..."}
-    dim_keys = ("政策通报", "规模供需", "核心企业", "价格市场")
-    if isinstance(parsed, dict) and any(k in parsed for k in dim_keys):
-        for i, name in enumerate(dim_keys, 1):
+    # 优先解析 4 维度切片字典: {"核心事件": "...", "关键底牌": "...", "市场反应": "...", "横向影响": "..."}
+    dim_keys = ("核心事件", "关键底牌", "市场反应", "横向影响")
+    legacy_keys = ("政策通报", "规模供需", "核心企业", "价格市场")
+    active_keys = dim_keys if (isinstance(parsed, dict) and any(k in parsed for k in dim_keys)) else legacy_keys
+    if isinstance(parsed, dict) and any(k in parsed for k in active_keys):
+        for i, name in enumerate(active_keys, 1):
             sq = str(parsed.get(name) or "").strip()
             if not sq:
                 continue
