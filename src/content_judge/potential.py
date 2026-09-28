@@ -67,6 +67,8 @@ class Score:
         #    —— 写测试时抓到的。判据放属性里，才是每条路径都过得了的。
         return (isinstance(self.gate, dict)
                 and all(self.gate.get(k) is True for k in GATE_KEYS)
+                and bool(self.expected)
+                and bool(self.test)
                 and not self.blocked)
 
     @property
@@ -86,12 +88,21 @@ class Score:
 
 
 def _parse(raw: str) -> list[dict]:
-    m = _JSON.search(raw or "")
-    blob = m.group(1) if m else (raw or "").strip()
+    raw = (raw or "").strip()
+    m = _JSON.search(raw)
+    blob = m.group(1) if m else raw
     try:
         data = json.loads(blob)
     except json.JSONDecodeError:
-        return []
+        s = blob.find("{")
+        e = blob.rfind("}")
+        if s != -1 and e != -1:
+            try:
+                data = json.loads(blob[s:e+1])
+            except Exception:
+                return []
+        else:
+            return []
     items = data.get("items") if isinstance(data, dict) else data
     return items if isinstance(items, list) else []
 
@@ -115,14 +126,6 @@ def score(items: Sequence[dict],
         blob = f"{it.get('title', '')}\n{it.get('body', '')}"
         if count_numbers:
             out[i].specificity = count_numbers(blob)
-        # 🔴 **选题标题只扫营销词，不扫操作词**（2026-09-01 实测修正）。
-        # 首跑实测：「新股破发能抄底吗」64.5 分、闸 A 过了，却因标题含「抄底」被拦 ——
-        # 而那是**真人的问法**，不是我们在建议抄底。`belief_facts` 早写过同一条：
-        # 「F1 豁免（真人问句原样，「割」「补仓」本就是问法的一部分）」。
-        # ⇒ 调用方传进来的 `banned` 应当只含**营销类**（涨停/买入/推荐/牛股 ——
-        #   标题出现这些说明这个选题本身就是荐股）；操作类（抄底/止损/加仓）
-        #   由出片链的闸③在**我们自己写的文案**上拦，那里才是红线所在。
-        # ⚠️ 正文一律不扫：正文是别人的原始素材，拦它等于把整个财经语料判死。
         title = str(it.get("title", ""))
         out[i].blocked = [w for w in banned if w in title]
 
@@ -138,7 +141,6 @@ def score(items: Sequence[dict],
         if not 0 <= idx < len(out):
             continue
         g = r.get("gate")
-        # ⚠️ 只认 dict：模型偶尔回旧格式的字符串，那时按「没过」处理而不是硬塞进去
         out[idx].gate = g if isinstance(g, dict) else None
         out[idx].expected = str(r.get("expected", ""))[:120]
         out[idx].test = str(r.get("test", ""))[:120]
@@ -154,8 +156,7 @@ def score(items: Sequence[dict],
 def summary(scores: Sequence[Score]) -> str:
     """一行体检，给日志和人工看。"""
     ok = [s for s in scores if s.passed]
-    hooks = {h: sum(1 for s in scores if s.passed and s.hook_type == h) for h in HOOK_TYPES}
     return (f"[potential] {len(ok)}/{len(scores)} 过闸 · "
-            + " ".join(f"{h}:{n}" for h, n in hooks.items())
-            + f" · 硬门未过:{sum(1 for s in scores if not s.passed and not s.blocked)}"
-            + f" · 合规拦截:{sum(1 for s in scores if s.blocked)}")
+            f"硬门未过:{sum(1 for s in scores if not s.passed and not s.blocked)}"
+            f"{f' · 合规拦截:{sum(1 for s in scores if s.blocked)}' if any(s.blocked for s in scores) else ''}")
+

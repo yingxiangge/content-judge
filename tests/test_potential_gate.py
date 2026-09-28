@@ -4,11 +4,12 @@ from content_judge.potential import Score
 from content_judge.specs.content_potential import GATE_KEYS, HOOK_TYPES, WEIGHTS
 
 ALL_PASS = {"account_action": True, "secondary_market": True,
-            "content_hook": True, "hook_type": "warning"}
+            "cognitive_contrast": True, "hook_type": "warning"}
 
 
 def test_all_three_gates_pass():
     s = Score(title="中东油轮遇袭油运股能不能追", gate=dict(ALL_PASS),
+              expected="油轮遇袭以为大涨", test="实际次日冲高回落",
               audience=8, relevance=8, tension=8, utility=8)
     assert s.passed is True
     assert s.hook_type == "warning"
@@ -20,7 +21,7 @@ def test_each_gate_alone_can_block():
     for k in GATE_KEYS:
         g = dict(ALL_PASS)
         g[k] = False
-        s = Score(title="x", gate=g, audience=10, relevance=10, tension=10, utility=10)
+        s = Score(title="x", gate=g, expected="e", test="t", audience=10, relevance=10, tension=10, utility=10)
         assert s.passed is False, f"{k}=False 竟然放行了"
         assert k in s.line(), f"line() 没说明缺的是 {k}"
 
