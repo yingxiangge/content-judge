@@ -6,15 +6,16 @@
     from content_judge.potential import score
     res = score(items, llm=my_llm, count_numbers=my_counter, banned=WORDS)
     for r in res:
-        print(r.title, r.gate, r.total, r.blocked)
+        print(r.title, r.gate, r.total, r.verdict, r.blocked)
 
 🔴 **三个注入点都是刻意的**：
   · `llm` —— 同 `judge()`：不给就只跑客观项，包不持有全局状态；
-  · `count_numbers` —— 数字判据**已经存在于业务侧**（闸①②在用同一个函数）。
-    在这里再实现一份，两份哪天分叉了，同一个数会被闸和打分给出不同结论；
+  · `count_numbers` —— 数字判据**已经存在于业务侧**（闸①②在用同一个函数）；
   · `banned` —— 本包不含一个业务词（同 horizon/goofish 的分工）。
 
-**定位是淘汰器不是预测器**，详见 `specs/content_potential.py` 文件头。
+🔴 **定位：爆款门禁（2026-09-30 重构）**：
+  “视频定的是爆款才发，平庸不发，宁缺毋滥（战略空仓）”。
+  详见 `specs/content_potential.py` 文件头。
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence
 
-from .specs.content_potential import (GATE_KEYS, HOOK_TYPES, SYSTEM_BLOCKS,
+from .specs.content_potential import (GATE_KEYS, SYSTEM_BLOCKS,
                                       WEIGHTS, render_batch)
 
 _JSON = re.compile(r"```json\s*(.+?)\s*```", re.S)
@@ -33,12 +34,14 @@ _JSON = re.compile(r"```json\s*(.+?)\s*```", re.S)
 class Score:
     """一条原料的打分结果。"""
     title: str
-    # 🔴 三道硬门的判定结果 dict（`GATE_KEYS` 三个布尔 + hook_type），None ＝ 有门没过。
-    #    2026-09-06 从 "A"/"B"/"C" 三选一改来：那种设计模型能自我欺骗
-    #    （任何题都能说成「提醒投资者注意风险」⇒ A 恒真，实测 44% 过闸率）。
     gate: Optional[dict] = None
-    expected: str = ""                    # 观众原来相信什么 —— G4 写不出这个就是没张力
-    test: str = ""                        # 历史数据可能推翻它什么
+    expected: str = ""
+    test: str = ""
+    # 新版三维张力评分 (0-5)
+    decision_urgency: int = 0
+    event_tension: int = 0
+    cost_of_error: int = 0
+    # 历史字段兼容
     audience: int = 0
     relevance: int = 0
     tension: int = 0
@@ -49,42 +52,62 @@ class Score:
 
     @property
     def total(self) -> float:
-        """四维加权。**只用于排序，不用于淘汰**（淘汰看 `passed`）。"""
-        return round(
-            self.audience * WEIGHTS["audience"]
-            + self.relevance * WEIGHTS["relevance"]
-            + self.tension * WEIGHTS["tension"]
-            + self.utility * WEIGHTS["utility"], 1) / 10
+        """总分：G1×6 + G2×8 + G3×6（满分 100 分）。由代码死公式算，禁止 LLM 自算漂移。"""
+        # 兼容旧打分模式
+        if self.decision_urgency == 0 and self.event_tension == 0 and self.cost_of_error == 0:
+            if any((self.audience, self.relevance, self.tension, self.utility)):
+                return round(
+                    self.audience * 3.0
+                    + self.relevance * 2.5
+                    + self.tension * 2.5
+                    + self.utility * 2.0, 1)
+        return float(
+            self.decision_urgency * WEIGHTS.get("decision_urgency", 6)
+            + self.event_tension * WEIGHTS.get("event_tension", 8)
+            + self.cost_of_error * WEIGHTS.get("cost_of_error", 6)
+        )
+
+    @property
+    def verdict(self) -> str:
+        """三档裁决：publish（顶级爆款才发）/ hold（平庸扣下不发）/ eliminated（淘汰）。"""
+        hard_ok = (
+            isinstance(self.gate, dict)
+            and all(self.gate.get(k) is True for k in GATE_KEYS)
+            and not self.blocked
+        )
+        if not hard_ok:
+            return "eliminated"
+        if (
+            self.decision_urgency >= 3
+            and self.event_tension >= 3
+            and self.cost_of_error >= 3
+            and self.total >= 70.0
+        ):
+            return "publish"
+        return "hold"
 
     @property
     def passed(self) -> bool:
-        """过不过闸。🔴 **只看硬门与合规，与分数无关。**
+        """过不过闸。🔴 只有达到 publish 标准的顶级爆款才算过闸放行！
 
-        三道门必须**全部** True —— 缺一条就不是我们要的题。
+        硬门淘汰（eliminated）与平庸及格品（hold）均不过闸，坚决空仓。
         """
-        # ⚠️ `isinstance` 不能省：`_parse` 拦得住模型回的旧格式字符串，
-        #    但直接构造 `Score(gate="A")` 会绕过它，那时 `.get()` 直接 AttributeError
-        #    —— 写测试时抓到的。判据放属性里，才是每条路径都过得了的。
-        return (isinstance(self.gate, dict)
-                and all(self.gate.get(k) is True for k in GATE_KEYS)
-                and bool(self.expected)
-                and bool(self.test)
-                and not self.blocked)
+        return self.verdict == "publish"
 
     @property
     def hook_type(self) -> str:
-        return (self.gate or {}).get("hook_type", "") if isinstance(self.gate, dict) else ""
+        return self.verdict
 
     def line(self) -> str:
         if not isinstance(self.gate, dict):
             g = "硬门未过"
         else:
             miss = [k for k in GATE_KEYS if self.gate.get(k) is not True]
-            g = f"缺{','.join(miss)}" if miss else (self.hook_type or "过闸")
+            g = f"缺{','.join(miss)}" if miss else self.verdict
         b = f" · 🚫{','.join(self.blocked)}" if self.blocked else ""
         return (f"[{'✓' if self.passed else '✗'}] {self.total:>5.1f} {g:<10} "
-                f"A{self.audience} R{self.relevance} T{self.tension} U{self.utility} "
-                f"S{self.specificity}{b} · {self.title[:26]} · {self.why[:40]}")
+                f"G1:{self.decision_urgency} G2:{self.event_tension} G3:{self.cost_of_error} "
+                f"{b} · {self.title[:26]} · {self.why[:40]}")
 
 
 def _parse(raw: str) -> list[dict]:
@@ -142,21 +165,35 @@ def score(items: Sequence[dict],
             continue
         g = r.get("gate")
         out[idx].gate = g if isinstance(g, dict) else None
-        out[idx].expected = str(r.get("expected", ""))[:120]
-        out[idx].test = str(r.get("test", ""))[:120]
-        for k in ("audience", "relevance", "tension", "utility"):
+        
+        scores_obj = r.get("scores") if isinstance(r.get("scores"), dict) else r
+        for k, attr in (
+            ("decision_urgency", "decision_urgency"),
+            ("event_tension", "event_tension"),
+            ("cost_of_error", "cost_of_error"),
+            ("audience", "audience"),
+            ("relevance", "relevance"),
+            ("tension", "tension"),
+            ("utility", "utility"),
+        ):
             try:
-                out[idx].__dict__[k] = max(0, min(10, int(r.get(k, 0))))
+                val = scores_obj.get(k)
+                if val is not None:
+                    out[idx].__dict__[attr] = max(0, min(10, int(val)))
             except (TypeError, ValueError):
                 pass
-        out[idx].why = str(r.get("why", ""))[:120]
+        
+        out[idx].expected = str(r.get("expected", ""))[:120]
+        out[idx].test = str(r.get("test", ""))[:120]
+        out[idx].why = str(r.get("why", ""))[:240]
     return out
 
 
 def summary(scores: Sequence[Score]) -> str:
     """一行体检，给日志和人工看。"""
-    ok = [s for s in scores if s.passed]
-    return (f"[potential] {len(ok)}/{len(scores)} 过闸 · "
-            f"硬门未过:{sum(1 for s in scores if not s.passed and not s.blocked)}"
+    pub = [s for s in scores if s.passed]
+    hld = [s for s in scores if s.verdict == "hold"]
+    elm = [s for s in scores if s.verdict == "eliminated"]
+    return (f"[potential] {len(pub)}条爆款(publish) · {len(hld)}条平庸扣下(hold) · "
+            f"{len(elm)}条硬门淘汰(eliminated)"
             f"{f' · 合规拦截:{sum(1 for s in scores if s.blocked)}' if any(s.blocked for s in scores) else ''}")
-
