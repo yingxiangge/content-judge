@@ -81,7 +81,6 @@ class Score:
             self.decision_urgency >= 3
             and self.event_tension >= 3
             and self.cost_of_error >= 3
-            and self.total >= 70.0
         ):
             return "publish"
         return "hold"
