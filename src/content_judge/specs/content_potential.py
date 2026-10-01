@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 # 两道硬门字段名。全 True 才算通过硬门进入评分。
 GATE_KEYS = ("direct_impact", "actionable_choice")
@@ -115,11 +116,16 @@ verdict 仅允许：eliminated / hold / publish"""
 
 
 def render_batch(items: list[dict]) -> str:
-    """待评条目 → user 消息。返回格式化的 JSON 数组字符串（只传标题，不传事实）。"""
+    """待评条目 → user 消息。返回格式化的 JSON 数组字符串（物理阻断事实，绝不传入）。"""
     payload = []
     for n, it in enumerate(items, 1):
-        name = it.get("name") or it.get("title") or ""
-        payload.append({"id": n, "topic": f"【标题】{name}".strip()})
+        raw = str(it.get("topic") or it.get("name") or it.get("title") or "").strip()
+        # 物理剥离任何拼接在标题文本中的事实段落（如 '| 【事实】...' 或换行事实）
+        clean = re.sub(r"[\s\|]*【事实】.*$", "", raw, flags=re.S).strip()
+        clean = re.sub(r"\n\s*事实[:：].*$", "", clean, flags=re.S).strip()
+        # 剥离可能已有的【标题】前缀后统一添加，避免【标题】【标题】重复
+        clean = re.sub(r"^(?:【标题】\s*)+", "", clean).strip()
+        payload.append({"id": n, "topic": f"【标题】{clean}".strip()})
     return json.dumps(payload, ensure_ascii=False)
 
 

@@ -97,3 +97,41 @@ def test_weights_match_comment():
     assert s2.total == 40.0
     s3 = Score(title="x", decision_urgency=0, event_tension=0, cost_of_error=5)
     assert s3.total == 30.0
+
+
+def test_render_batch_strictly_strips_facts():
+    """验证 render_batch 无论输入什么字典或字符串，送给模型的 user JSON 数组绝对只含净标题，物理阻断事实。"""
+    import json
+    from content_judge.specs.content_potential import render_batch
+
+    items = [
+        # 情况 1：字典里带单独的 event/fact/body 字段
+        {
+            "name": "银行股还能拿吗？",
+            "event": "财政部拟发行特别国债注资大行",
+            "body": "详细新闻正文...",
+            "fact": "大盘微跌",
+        },
+        # 情况 2：标题字符串内拼接了事实与前缀
+        {
+            "title": "【标题】昇腾迎来突破，算力却领跌，该抄底还是止损？ | 【事实】昇腾960发布，寒武纪跌3.54%",
+        },
+        # 情况 3：key 叫 topic，且带换行事实
+        {
+            "topic": "三桶油放量调整，高股息要减仓吗？\n事实：布伦特原油昨夜跌超4%",
+        },
+    ]
+
+    rendered_json = render_batch(items)
+    data = json.loads(rendered_json)
+
+    assert len(data) == 3
+    # 验证字段只有 id 和 topic
+    for item in data:
+        assert set(item.keys()) == {"id", "topic"}
+        assert "事实" not in item["topic"]
+
+    assert data[0]["topic"] == "【标题】银行股还能拿吗？"
+    assert data[1]["topic"] == "【标题】昇腾迎来突破，算力却领跌，该抄底还是止损？"
+    assert data[2]["topic"] == "【标题】三桶油放量调整，高股息要减仓吗？"
+
